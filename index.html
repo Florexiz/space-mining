@@ -150,7 +150,6 @@ details.src li{font-size:12.5px;color:var(--ink-soft)}
       <div class="field"><label class="t">Modules</label><div class="seg" id="mods"></div><div class="hint">Parallels are set to the module maximum: MK-I 2 (UV), MK-II 4 (UHV), MK-III 8 (UEV).</div></div>
       <div class="field"><label class="t">Drones</label><div class="seg" id="drones"></div><div class="hint">Tiers you own. The result always uses one drone tier. The MAX drone is not recognised by the miner, so it is not listed.</div></div>
       <div class="field"><label class="t">Best plasma available</label><div class="seg" id="plasmas"></div></div>
-      <div class="field"><label class="t" for="comp">Computation</label><input id="comp" type="number" min="0" step="10"><div class="hint">per module, CU/s. Can lower the parallels below the module maximum.</div></div>
 
       <h3>Search</h3>
       <label class="check"><input type="checkbox" id="cycle"> Try cycling distance (range and step)</label>
@@ -201,7 +200,7 @@ function entriesAt(mod, d, drones, T){
   for (const t of drones) for (const a of AST){
     if (a.mt > mod.mt || d < a.dmin || d > a.dmax) continue;
     const p = a.tiers[t]; if (!p) continue;
-    const par = Math.min(mod.par, Math.floor(S.comp/a.comp), Math.floor(mod.V/p[3]));
+    const par = Math.min(mod.par, Math.floor(mod.V/p[3]));
     let all = 0; for (const o of a.outs) all += o.share*o.amount;
     out.push({a, t, w:a.w, par, minS:p[0], dS:p[1]-p[0], dur:p[2], eut:p[3], all, tv:tgtVector(a,T)});
   }
@@ -316,7 +315,7 @@ function solve(){
 function detail(r){
   const T = targets(), drones = tiersOf(r.mask), pt = S.plasma, od = r.od;
   const b = bonusChance(pt, od), tm = timeMul(pt, od), use = PLASMAS[pt-1].use;
-  let time=0, eu=0, plasma=0, comp=0, failW=0, totW=0, tParW=0, tW=0;
+  let peak=0, peakT=0, time=0, eu=0, plasma=0, comp=0, failW=0, totW=0, tParW=0, tW=0;
   const perMat = {}, drills = {}, fails = new Set();
   for (const d of r.dists){
     const E = entriesAt(r.mod, d, drones, T);
@@ -326,7 +325,7 @@ function detail(r){
       const p = e.w/W; totW += p;
       if (e.par <= 0){ time += p*S.idle; failW += p; fails.add(shortName(e.a)+" "+TIERS[e.t]); continue; }
       const st = e.par*(e.minS + e.dS*b), ticks = Math.max(1, Math.floor(e.dur*tm));
-      time += p*ticks; eu += p*ticks*e.eut*e.par; plasma += p*e.par*use; comp += p*ticks*e.a.comp*e.par;
+      time += p*ticks; eu += p*ticks*e.eut*e.par; plasma += p*e.par*use; comp += p*ticks*e.a.comp*e.par; peak = Math.max(peak, Math.ceil(e.a.comp*e.par)); if (e.tv.some(v=>v>0)) peakT = Math.max(peakT, Math.ceil(e.a.comp*e.par));
       drills[e.t] = (drills[e.t]||0) + p*e.par*4;
       const isT = e.tv.some(v=>v>0); if (isT){ tParW += p*e.par; tW += p; }
       for (const o of e.a.outs){
@@ -338,7 +337,7 @@ function detail(r){
   }
   const sec = time/20;
   for (const k in perMat) perMat[k].n /= sec;
-  return { perMat, eut:eu/time, plasma:plasma/sec, comp:comp/time, drills:Object.fromEntries(Object.entries(drills).map(([t,v])=>[t,v/sec*3600])),
+  return { peak, peakT, perMat, eut:eu/time, plasma:plasma/sec, comp:comp/time, drills:Object.fromEntries(Object.entries(drills).map(([t,v])=>[t,v/sec*3600])),
            opSec: sec/r.dists.length, failShare: totW? failW/(r.dists.length) : 0, fails:[...fails], tPar: tW? tParW/tW : 0 };
 }
 
@@ -396,13 +395,12 @@ function renderInputs(){
   toggles(document.getElementById("mods"), MODULES.map(m=>({v:m.mt,label:m.name})), v=>S.mods.includes(v), v=>{ S.mods = S.mods.includes(v) ? S.mods.filter(x=>x!==v) : [...S.mods, v]; update(); });
   toggles(document.getElementById("drones"), TIERS.map((t,i)=>({v:i,label:t})), v=>S.drones.includes(v), v=>{ S.drones = S.drones.includes(v) ? S.drones.filter(x=>x!==v) : [...S.drones, v]; update(); });
   toggles(document.getElementById("plasmas"), PLASMAS.map(p=>({v:p.t,label:p.name})), v=>S.plasma===v, v=>{ S.plasma = v; update(); });
-  document.getElementById("comp").value = S.comp; document.getElementById("idle").value = S.idle;
+  document.getElementById("idle").value = S.idle;
   document.getElementById("cycle").checked = S.cycle;
   document.getElementById("odAuto").checked = S.odAuto; document.getElementById("odFixed").value = S.odFixed;
   document.getElementById("odFixedBox").hidden = S.odAuto;
 }
 document.getElementById("objective").onchange = e => { S.objective = e.target.value; update(); };
-document.getElementById("comp").onchange = e => { S.comp = Math.max(0, +e.target.value||0); update(); };
 document.getElementById("idle").onchange = e => { S.idle = Math.max(0, Math.floor(+e.target.value||0)); update(); };
 document.getElementById("cycle").onchange = e => { S.cycle = e.target.checked; update(); };
 document.getElementById("odAuto").onchange = e => { S.odAuto = e.target.checked; update(); };
@@ -447,7 +445,7 @@ function renderResult(){
   const tRows = all.filter(([k,m])=>m.ti>=0), oRows = all.filter(([k,m])=>m.ti<0);
   const row = ([k,m]) => `<div class="orow${m.ti>=0?" t":""}"><span>${m.name} <span style="color:var(--ink-soft);font-weight:400">${m.form}</span></span><div class="bar-bg"><div class="bar-fg" style="width:${(m.n/mxm*100).toFixed(1)}%;${m.ti>=0?`background:${targetColor(m.ti)}`:""}"></div></div><span class="num">${fmt(m.n)}/s</span></div>`;
   const warn = [];
-  if (D.failShare > 0.0005) warn.push(`${pct(D.failShare)} of rolls cannot run (${D.fails.join(", ")}): not enough computation or voltage. Each such roll costs the wait you set and yields nothing.`);
+  if (D.failShare > 0.0005) warn.push(`${pct(D.failShare)} of rolls cannot run (${D.fails.join(", ")}): the recipe needs more voltage than the module has. Each such roll costs the wait you set and yields nothing.`);
   if (r.kind==="cycle" && r.dists.some(d=>d===0)) warn.push(`The cycle includes distance 0, where there are no asteroids.`);
   const cyc = r.kind === "cycle" ? `<div class="cycle-note">Set <b>distance ${r.D}</b>, <b>range ${r.R}</b>, <b>step ${r.step}</b> and turn <b>cycle</b> on. The module then moves one step after every recipe check and visits ${r.dists.join(" → ")} in turn, so each distance gets the same number of attempts.</div>` : "";
   box.innerHTML = `
@@ -493,7 +491,9 @@ function renderResult(){
     <h2>Upkeep</h2>
     <div class="costs">
       <div><span>Power, average</span><b>${euTxt(D.eut)}</b></div>
-      <div><span>Computation, average</span><b>${fmt(D.comp,0)} CU/s</b></div>
+      <div><span>Computation for full parallels</span><b>${fmt(D.peak,0)} CU/s</b></div>
+      <div><span>…only for the targets</span><b>${fmt(D.peakT,0)} CU/s</b></div>
+      <div><span>Computation, average use</span><b>${fmt(D.comp,0)} CU/s</b></div>
       <div><span>${PLASMAS[S.plasma-1].name} plasma</span><b>${fmt(D.plasma,1)} L/s</b></div>
       ${Object.entries(D.drills).map(([t,v])=>`<div><span>${DRILL[t]} drill head + rod (${TIERS[t]})</span><b>${fmt(v,1)}/h each</b></div>`).join("")}
     </div>
@@ -511,7 +511,7 @@ function renderResult(){
       <ul>
         <li>Each recipe check picks an asteroid at random, by weight, from the recipes whose module tier is met, whose distance range includes the current distance and whose drone tier is loaded. The calculator assumes exactly one drone tier is loaded.</li>
         <li>With cycle on, the distance moves by the step after every recipe check, successful or not, from distance − range up to distance + range (capped at 300), then wraps. The calculator gives each visited distance an equal number of attempts.</li>
-        <li>Parallels = min(module maximum, computation / asteroid CU, module V / recipe EU/t). The parallel setting is assumed to be at the module maximum and plasma is assumed to be sufficient.</li>
+        <li>Parallels = min(module maximum, module V / recipe EU/t). Computation, plasma, drill heads and rods are assumed to be sufficient; Upkeep shows how much computation that takes. With less computation the module runs fewer parallels on the hungrier asteroids.</li>
         <li>Stacks per operation = parallels × (minSize + (maxSize − minSize) × bonus stack chance). Bonus chance = min((plasma tier / 6)³ × (2 − overdrive), 75%).</li>
         <li>Time = duration × max((1 − 0.1 × (plasma tier − 1)) / overdrive, 0.5). A roll that cannot run costs the wait you set. Output per second is the long-run expected value.</li>
         <li>Sizes, durations and EU/t for each drone tier come from SpaceMiningRecipes.java; the logic from TileEntityModuleMiner.java and TTMultiblockBase.java (GT5-Unofficial 5.09.54.183). How long the module really waits after a failed roll depends on recipe-check events and was not measured in game.</li>
